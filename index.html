@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spy Hunter – Road Scroller</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #1a1a1a;
+    }
+    canvas {
+      display: block;
+      background: #2d2d2d;
+      border: 2px solid #444;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="600" height="800"></canvas>
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Road
+    const roadWidth = canvas.width * 0.5;
+    const roadLeft = (canvas.width - roadWidth) / 2;
+    const roadRight = roadLeft + roadWidth;
+
+    // Dashed lane lines (scroll downward = increase offset)
+    const dashLength = 40;
+    const dashGap = 30;
+    const laneCount = 3;
+    const laneWidth = roadWidth / laneCount;
+    let dashOffset = 0;
+    const scrollSpeed = 10;
+
+    // Player car
+    const playerWidth = 40;
+    const playerHeight = 60;
+    const playerY = canvas.height * (2 / 3);
+    let playerX = canvas.width / 2 - playerWidth / 2;
+    const playerSpeed = 8;
+    const keys = { left: false, right: false };
+
+    function drawRoad() {
+      // Green roadside – left
+      ctx.fillStyle = '#2d5a27';
+      ctx.fillRect(0, 0, roadLeft, canvas.height);
+      // Green roadside – right
+      ctx.fillStyle = '#2d5a27';
+      ctx.fillRect(roadRight, 0, canvas.width - roadRight, canvas.height);
+
+      // Gray road
+      ctx.fillStyle = '#4a4a4a';
+      ctx.fillRect(roadLeft, 0, roadWidth, canvas.height);
+
+      // White dashed lane lines (vertical, scrolling)
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([dashLength, dashGap]);
+      ctx.lineDashOffset = -dashOffset;
+
+      for (let i = 1; i < laneCount; i++) {
+        const x = roadLeft + i * laneWidth;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    function drawPlayer() {
+      ctx.fillStyle = '#e74c3c';
+      ctx.fillRect(playerX, playerY, playerWidth, playerHeight);
+    }
+
+    function update() {
+      dashOffset = (dashOffset + scrollSpeed) % (dashLength + dashGap);
+
+      if (keys.left) playerX -= playerSpeed;
+      if (keys.right) playerX += playerSpeed;
+      playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+    }
+
+    function gameLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawRoad();
+      drawPlayer();
+      update();
+      requestAnimationFrame(gameLoop);
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
+      if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'ArrowLeft') keys.left = false;
+      if (e.key === 'ArrowRight') keys.right = false;
+    });
+
+    gameLoop();
+  </script>
+</body>
+</html>
