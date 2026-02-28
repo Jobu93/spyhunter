@@ -18,10 +18,35 @@
       background: #2d2d2d;
       border: 2px solid #444;
     }
+    .lives {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      color: #fff;
+      font: bold 20px/1 sans-serif;
+      text-shadow: 0 1px 2px #000;
+      z-index: 1;
+    }
+    .game-over {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #e74c3c;
+      font: bold 48px/1.2 sans-serif;
+      text-shadow: 0 2px 4px #000;
+      z-index: 2;
+      display: none;
+    }
+    .game-over.visible { display: block; }
   </style>
 </head>
 <body>
-  <canvas id="gameCanvas" width="600" height="800"></canvas>
+  <div style="position: relative;">
+    <span id="livesDisplay" class="lives">Lives: 3</span>
+    <div id="gameOver" class="game-over">Game Over</div>
+    <canvas id="gameCanvas" width="600" height="800"></canvas>
+  </div>
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
@@ -46,6 +71,21 @@
     let playerX = canvas.width / 2 - playerWidth / 2;
     const playerSpeed = 8;
     const keys = { left: false, right: false };
+
+    // Game state
+    let lives = 3;
+    let gameOver = false;
+    let animationId = null;
+    let flashUntil = 0;
+    const flashDuration = 250;
+
+    // Enemies
+    const enemyColors = ['#3498db', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'];
+    const enemyWidth = 40;
+    const enemyHeight = 60;
+    const enemySpeedVariation = 3;  // ± from scrollSpeed
+    let enemies = [];
+    let nextSpawnAt = Date.now() + 1000 + Math.random() * 1000;
 
     function drawRoad() {
       // Green roadside – left
@@ -80,20 +120,80 @@
       ctx.fillRect(playerX, playerY, playerWidth, playerHeight);
     }
 
+    function spawnEnemy() {
+      const lane = Math.floor(Math.random() * laneCount);
+      const laneCenterX = roadLeft + lane * laneWidth + laneWidth / 2;
+      const x = Math.max(roadLeft, Math.min(roadRight - enemyWidth, laneCenterX - enemyWidth / 2));
+      const speed = scrollSpeed + (Math.random() * 2 - 1) * enemySpeedVariation;
+      const color = enemyColors[Math.floor(Math.random() * enemyColors.length)];
+      enemies.push({ x, y: -enemyHeight, width: enemyWidth, height: enemyHeight, speed, color });
+    }
+
+    function drawEnemies() {
+      enemies.forEach(e => {
+        ctx.fillStyle = e.color;
+        ctx.fillRect(e.x, e.y, e.width, e.height);
+      });
+    }
+
+    function drawFlash() {
+      if (Date.now() < flashUntil) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    function collides(a, b) {
+      return a.x < b.x + b.width && a.x + a.width > b.x &&
+             a.y < b.y + b.height && a.y + a.height > b.y;
+    }
+
     function update() {
+      if (gameOver) return;
       dashOffset = (dashOffset + scrollSpeed) % (dashLength + dashGap);
 
       if (keys.left) playerX -= playerSpeed;
       if (keys.right) playerX += playerSpeed;
       playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+
+      // Spawn enemies at random 1–2s intervals
+      const now = Date.now();
+      if (now >= nextSpawnAt) {
+        spawnEnemy();
+        nextSpawnAt = now + 1000 + Math.random() * 1000;
+      }
+
+      // Move enemies (remove if off bottom)
+      const playerRect = { x: playerX, y: playerY, width: playerWidth, height: playerHeight };
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        enemies[i].y += enemies[i].speed;
+        if (enemies[i].y > canvas.height) {
+          enemies.splice(i, 1);
+          continue;
+        }
+        if (collides(playerRect, enemies[i])) {
+          flashUntil = Date.now() + flashDuration;
+          playerX = canvas.width / 2 - playerWidth / 2;
+          lives--;
+          document.getElementById('livesDisplay').textContent = 'Lives: ' + lives;
+          enemies.splice(i, 1);
+          if (lives <= 0) {
+            gameOver = true;
+            document.getElementById('gameOver').classList.add('visible');
+            return;
+          }
+        }
+      }
     }
 
     function gameLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawRoad();
+      drawEnemies();
       drawPlayer();
+      drawFlash();
       update();
-      requestAnimationFrame(gameLoop);
+      if (!gameOver) animationId = requestAnimationFrame(gameLoop);
     }
 
     document.addEventListener('keydown', (e) => {
