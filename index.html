@@ -27,6 +27,15 @@
       text-shadow: 0 1px 2px #000;
       z-index: 1;
     }
+    .score {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      color: #fff;
+      font: bold 20px/1 sans-serif;
+      text-shadow: 0 1px 2px #000;
+      z-index: 1;
+    }
     .game-over {
       position: absolute;
       top: 50%;
@@ -44,6 +53,7 @@
 <body>
   <div style="position: relative;">
     <span id="livesDisplay" class="lives">Lives: 3</span>
+    <span id="scoreDisplay" class="score">Score: 0</span>
     <div id="gameOver" class="game-over">Game Over</div>
     <canvas id="gameCanvas" width="600" height="800"></canvas>
   </div>
@@ -86,6 +96,15 @@
     const enemySpeedVariation = 3;  // ± from scrollSpeed
     let enemies = [];
     let nextSpawnAt = Date.now() + 1000 + Math.random() * 1000;
+
+    // Bullets (weapon)
+    const bulletWidth = 6;
+    const bulletHeight = 16;
+    const bulletSpeed = 22;  // upward, faster than scroll
+    const fireCooldownMs = 340;  // ~3 bullets per second
+    let bullets = [];
+    let lastShotAt = 0;
+    let score = 0;
 
     function drawRoad() {
       // Green roadside – left
@@ -136,6 +155,13 @@
       });
     }
 
+    function drawBullets() {
+      ctx.fillStyle = '#ffeb3b';
+      bullets.forEach(b => {
+        ctx.fillRect(b.x, b.y, b.width, b.height);
+      });
+    }
+
     function drawFlash() {
       if (Date.now() < flashUntil) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
@@ -161,6 +187,27 @@
       if (now >= nextSpawnAt) {
         spawnEnemy();
         nextSpawnAt = now + 1000 + Math.random() * 1000;
+      }
+
+      // Move bullets upward; remove if off top
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        bullets[i].y -= bulletSpeed;
+        if (bullets[i].y + bullets[i].height < 0) {
+          bullets.splice(i, 1);
+        }
+      }
+
+      // Bullet–enemy collision (destroy enemy, remove bullet, add score)
+      for (let b = bullets.length - 1; b >= 0; b--) {
+        for (let e = enemies.length - 1; e >= 0; e--) {
+          if (collides(bullets[b], enemies[e])) {
+            score += 100;
+            document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
+            enemies.splice(e, 1);
+            bullets.splice(b, 1);
+            break;
+          }
+        }
       }
 
       // Move enemies (remove if off bottom)
@@ -190,15 +237,27 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawRoad();
       drawEnemies();
+      drawBullets();
       drawPlayer();
       drawFlash();
       update();
       if (!gameOver) animationId = requestAnimationFrame(gameLoop);
     }
 
+    function fireBullet() {
+      if (gameOver) return;
+      const now = Date.now();
+      if (now - lastShotAt < fireCooldownMs) return;
+      lastShotAt = now;
+      const x = playerX + playerWidth / 2 - bulletWidth / 2;
+      const y = playerY;
+      bullets.push({ x, y, width: bulletWidth, height: bulletHeight });
+    }
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
       if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
+      if (e.key === ' ') { fireBullet(); e.preventDefault(); }
     });
     document.addEventListener('keyup', (e) => {
       if (e.key === 'ArrowLeft') keys.left = false;
