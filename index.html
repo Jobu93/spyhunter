@@ -27,6 +27,16 @@
       text-shadow: 0 1px 2px #000;
       z-index: 1;
     }
+    .timer {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font: bold 20px/1 sans-serif;
+      text-shadow: 0 1px 2px #000;
+      z-index: 1;
+    }
     .score {
       position: absolute;
       top: 12px;
@@ -76,6 +86,7 @@
 <body>
   <div style="position: relative;">
     <span id="livesDisplay" class="lives">Lives: 3</span>
+    <span id="timerDisplay" class="timer">0:00</span>
     <span id="scoreDisplay" class="score">Score: 0</span>
     <span id="weaponDisplay" class="weapon-hud">Weapon: None</span>
     <div id="weaponPopup" class="weapon-popup"></div>
@@ -97,7 +108,10 @@
     const laneCount = 3;
     const laneWidth = roadWidth / laneCount;
     let dashOffset = 0;
-    const scrollSpeed = 10;
+    // Difficulty ramping: scroll speed increases every 30s
+    const scrollSpeedMin = 6;
+    const scrollSpeedMax = 18;
+    const scrollSpeedRampIntervalMs = 30000;
 
     // Player car
     const playerWidth = 40;
@@ -110,20 +124,23 @@
     // Game state
     let lives = 3;
     let gameOver = false;
+    let gameStartTime = 0;  // set on first frame
     let animationId = null;
     let flashUntil = 0;
     const flashDuration = 250;
 
-    // Enemies
-    const enemyColors = ['#3498db', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'];
+    // Enemies: types = standard, aggressive, speed
+    const ENEMY_TYPES = { STANDARD: 'standard', AGGRESSIVE: 'aggressive', SPEED: 'speed' };
+    const enemyColors = ['#3498db', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'];  // standard only
     const enemyWidth = 40;
     const enemyHeight = 60;
-    const enemySpeedMin = 4;   // slowest enemies
-    const enemySpeedMax = 18;  // fastest enemies
     const enemyVanDodgeSpeed = 5;   // horizontal speed when dodging van
     const enemyVanCloseMargin = 25; // start dodging when this close to van (px)
     let enemies = [];
     let nextSpawnAt = Date.now() + 1000 + Math.random() * 1000;
+    // Spawn rate ramping: faster spawns over time (ms between spawns)
+    const spawnIntervalMinMs = 500;
+    const spawnIntervalMaxMs = 2000;
 
     // Bullets (weapon)
     const bulletWidth = 6;
@@ -215,13 +232,48 @@
       ctx.fillRect(playerX, playerY, playerWidth, playerHeight);
     }
 
-    function spawnEnemy() {
+    // Difficulty helpers: elapsed in seconds
+    function getCurrentScrollSpeed(elapsedSec) {
+      const steps = Math.floor(elapsedSec / 30);
+      const increment = 2;  // +2 every 30s
+      return Math.min(scrollSpeedMax, scrollSpeedMin + steps * increment);
+    }
+    function getSpawnIntervalMs(elapsedSec) {
+      const steps = Math.floor(elapsedSec / 30);
+      const decrease = 250;  // -250ms every 30s
+      const interval = spawnIntervalMaxMs - steps * decrease;
+      return Math.max(spawnIntervalMinMs, Math.min(spawnIntervalMaxMs, interval));
+    }
+    // Enemy type picker: returns 'standard', 'aggressive', or 'speed'
+    function pickEnemyType(elapsedSec) {
+      if (elapsedSec < 30) return ENEMY_TYPES.STANDARD;
+      const r = Math.random();
+      let aggressiveChance = 0.25 + Math.min(0.2, (elapsedSec - 30) / 180 * 0.2);  // 25% -> ~45% over time
+      let speedChance = 0;
+      if (elapsedSec >= 60) {
+        speedChance = 0.2 + Math.min(0.15, (elapsedSec - 60) / 180 * 0.15);  // 20% -> ~35% over time
+      }
+      if (r < speedChance) return ENEMY_TYPES.SPEED;
+      if (r < speedChance + aggressiveChance) return ENEMY_TYPES.AGGRESSIVE;
+      return ENEMY_TYPES.STANDARD;
+    }
+    function spawnEnemy(currentScrollSpeed, elapsedSec) {
       const lane = Math.floor(Math.random() * laneCount);
       const laneCenterX = roadLeft + lane * laneWidth + laneWidth / 2;
       const x = Math.max(roadLeft, Math.min(roadRight - enemyWidth, laneCenterX - enemyWidth / 2));
-      const speed = enemySpeedMin + Math.random() * (enemySpeedMax - enemySpeedMin);
-      const color = enemyColors[Math.floor(Math.random() * enemyColors.length)];
-      enemies.push({ x, y: -enemyHeight, width: enemyWidth, height: enemyHeight, speed, color, baseSpeed: speed, slowedUntil: 0 });
+      const type = pickEnemyType(elapsedSec);
+      let speed, color;
+      if (type === ENEMY_TYPES.STANDARD) {
+        speed = currentScrollSpeed;
+        color = enemyColors[Math.floor(Math.random() * enemyColors.length)];
+      } else if (type === ENEMY_TYPES.AGGRESSIVE) {
+        speed = currentScrollSpeed * 0.85;  // slower than road
+        color = '#c0392b';  // red
+      } else {
+        speed = currentScrollSpeed * 1.7;   // significantly faster
+        color = '#f1c40f';  // yellow
+      }
+      enemies.push({ x, y: -enemyHeight, width: enemyWidth, height: enemyHeight, speed, color, baseSpeed: speed, slowedUntil: 0, type });
     }
 
     function drawEnemies() {
@@ -296,14 +348,19 @@
 
     function update() {
       if (gameOver) return;
-      dashOffset = (dashOffset + scrollSpeed) % (dashLength + dashGap);
+      const now = Date.now();
+      if (gameStartTime === 0) gameStartTime = now;
+      const elapsedMs = now - gameStartTime;
+      const elapsedSec = elapsedMs / 1000;
+      const currentScrollSpeed = getCurrentScrollSpeed(elapsedSec);
+      dashOffset = (dashOffset + currentScrollSpeed) % (dashLength + dashGap);
+      document.getElementById('timerDisplay').textContent = Math.floor(elapsedSec / 60) + ':' + String(Math.floor(elapsedSec % 60)).padStart(2, '0');
 
       if (keys.left) playerX -= playerSpeed;
       if (keys.right) playerX += playerSpeed;
       playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
 
       // Spawn weapons van every 30 seconds
-      const now = Date.now();
       if (!weaponsVan && now >= nextWeaponsVanAt) {
         spawnWeaponsVan();
         nextWeaponsVanAt = now + weaponsVanSpawnInterval;
@@ -333,10 +390,11 @@
         weaponsVanPausedUntil = 0;
       }
 
-      // Spawn enemies at random 1–2s intervals
+      // Spawn enemies: interval decreases as difficulty ramps
       if (now >= nextSpawnAt) {
-        spawnEnemy();
-        nextSpawnAt = now + 1000 + Math.random() * 1000;
+        const spawnInterval = getSpawnIntervalMs(elapsedSec);
+        spawnEnemy(currentScrollSpeed, elapsedSec);
+        nextSpawnAt = now + spawnInterval * 0.5 + Math.random() * spawnInterval * 0.5;
       }
 
       // Move bullets upward; remove if off top
@@ -375,7 +433,7 @@
 
       // Oil slick: scroll with road, remove expired, destroy enemies that drive over
       for (let i = oilSlicks.length - 1; i >= 0; i--) {
-        oilSlicks[i].y += scrollSpeed;
+        oilSlicks[i].y += currentScrollSpeed;
         if (oilSlicks[i].y > canvas.height || now - oilSlicks[i].spawnTime >= oilSlickDurationMs) {
           oilSlicks.splice(i, 1);
           continue;
@@ -394,7 +452,7 @@
       // Smoke screen: scroll with road, remove expired; slow enemies that enter
       for (let i = smokeScreens.length - 1; i >= 0; i--) {
         const s = smokeScreens[i];
-        s.y += scrollSpeed;
+        s.y += currentScrollSpeed;
         if (now - s.spawnTime >= smokeScreenDurationMs || s.y > canvas.height) {
           smokeScreens.splice(i, 1);
           continue;
@@ -446,6 +504,17 @@
           }
         } else {
           e.y += effectiveSpeed;
+          // Aggressive cars: steer toward player's lane
+          if (e.type === ENEMY_TYPES.AGGRESSIVE) {
+            const playerCenter = playerX + playerWidth / 2;
+            const enemyCenter = e.x + e.width / 2;
+            const steerSpeed = 3;  // horizontal tracking speed
+            if (enemyCenter < playerCenter - 5) {
+              e.x = Math.min(roadRight - e.width, e.x + steerSpeed);
+            } else if (enemyCenter > playerCenter + 5) {
+              e.x = Math.max(roadLeft, e.x - steerSpeed);
+            }
+          }
         }
 
         if (enemies[i].y > canvas.height) {
