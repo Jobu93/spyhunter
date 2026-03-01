@@ -118,7 +118,10 @@
     const enemyColors = ['#3498db', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'];
     const enemyWidth = 40;
     const enemyHeight = 60;
-    const enemySpeedVariation = 3;  // ± from scrollSpeed
+    const enemySpeedMin = 4;   // slowest enemies
+    const enemySpeedMax = 18;  // fastest enemies
+    const enemyVanDodgeSpeed = 5;   // horizontal speed when dodging van
+    const enemyVanCloseMargin = 25; // start dodging when this close to van (px)
     let enemies = [];
     let nextSpawnAt = Date.now() + 1000 + Math.random() * 1000;
 
@@ -155,6 +158,29 @@
     let weaponUsesLeft = 0;
     const weaponPopupDuration = 1500;
     let weaponPopupUntil = 0;
+    const weaponDeployPopupDuration = 500;
+
+    // Oil Slick
+    const oilSlickWidth = 50;
+    const oilSlickHeight = 28;
+    const oilSlickDurationMs = 5000;
+    const oilSlickPoints = 150;
+    let oilSlicks = [];
+
+    // Smoke Screen
+    const smokeScreenBaseRadius = 25;
+    const smokeScreenMaxRadius = 55;
+    const smokeScreenDurationMs = 3000;
+    const smokeScreenSlowDurationMs = 2000;
+    const smokeScreenSlowFactor = 0.25;  // enemy moves at 25% speed
+    let smokeScreens = [];
+
+    // Missiles
+    const missileWidth = 14;
+    const missileHeight = 28;
+    const missileSpeed = 34;
+    const missilePoints = 200;
+    let missiles = [];
 
     function drawRoad() {
       // Green roadside – left
@@ -193,9 +219,9 @@
       const lane = Math.floor(Math.random() * laneCount);
       const laneCenterX = roadLeft + lane * laneWidth + laneWidth / 2;
       const x = Math.max(roadLeft, Math.min(roadRight - enemyWidth, laneCenterX - enemyWidth / 2));
-      const speed = scrollSpeed + (Math.random() * 2 - 1) * enemySpeedVariation;
+      const speed = enemySpeedMin + Math.random() * (enemySpeedMax - enemySpeedMin);
       const color = enemyColors[Math.floor(Math.random() * enemyColors.length)];
-      enemies.push({ x, y: -enemyHeight, width: enemyWidth, height: enemyHeight, speed, color });
+      enemies.push({ x, y: -enemyHeight, width: enemyWidth, height: enemyHeight, speed, color, baseSpeed: speed, slowedUntil: 0 });
     }
 
     function drawEnemies() {
@@ -222,6 +248,37 @@
       ctx.fillStyle = '#ffeb3b';
       bullets.forEach(b => {
         ctx.fillRect(b.x, b.y, b.width, b.height);
+      });
+    }
+
+    function drawOilSlicks() {
+      oilSlicks.forEach(o => {
+        ctx.fillStyle = '#2d1f0f';
+        ctx.strokeStyle = '#1a1208';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(o.x + o.width / 2, o.y + o.height / 2, o.width / 2, o.height / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+
+    function drawSmokeScreens() {
+      smokeScreens.forEach(s => {
+        const elapsed = (Date.now() - s.spawnTime) / smokeScreenDurationMs;
+        const radius = smokeScreenBaseRadius + (smokeScreenMaxRadius - smokeScreenBaseRadius) * Math.min(1, elapsed);
+        const alpha = 1 - elapsed * 0.7;
+        ctx.fillStyle = `rgba(100, 100, 100, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawMissiles() {
+      missiles.forEach(m => {
+        ctx.fillStyle = '#e74c3c';
+        ctx.fillRect(m.x, m.y, m.width, m.height);
       });
     }
 
@@ -303,10 +360,94 @@
         }
       }
 
-      // Move enemies (remove if off bottom)
+      // Missile–enemy collision (destroy enemy, remove missile, 200 points)
+      for (let m = missiles.length - 1; m >= 0; m--) {
+        for (let e = enemies.length - 1; e >= 0; e--) {
+          if (collides(missiles[m], enemies[e])) {
+            score += missilePoints;
+            document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
+            enemies.splice(e, 1);
+            missiles.splice(m, 1);
+            break;
+          }
+        }
+      }
+
+      // Oil slick: scroll with road, remove expired, destroy enemies that drive over
+      for (let i = oilSlicks.length - 1; i >= 0; i--) {
+        oilSlicks[i].y += scrollSpeed;
+        if (oilSlicks[i].y > canvas.height || now - oilSlicks[i].spawnTime >= oilSlickDurationMs) {
+          oilSlicks.splice(i, 1);
+          continue;
+        }
+        for (let e = enemies.length - 1; e >= 0; e--) {
+          if (collides(oilSlicks[i], enemies[e])) {
+            score += oilSlickPoints;
+            document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
+            enemies.splice(e, 1);
+            oilSlicks.splice(i, 1);
+            break;
+          }
+        }
+      }
+
+      // Smoke screen: scroll with road, remove expired; slow enemies that enter
+      for (let i = smokeScreens.length - 1; i >= 0; i--) {
+        const s = smokeScreens[i];
+        s.y += scrollSpeed;
+        if (now - s.spawnTime >= smokeScreenDurationMs || s.y > canvas.height) {
+          smokeScreens.splice(i, 1);
+          continue;
+        }
+        const elapsed = (now - s.spawnTime) / smokeScreenDurationMs;
+        const radius = smokeScreenBaseRadius + (smokeScreenMaxRadius - smokeScreenBaseRadius) * Math.min(1, elapsed);
+        enemies.forEach(e => {
+          const ex = e.x + e.width / 2;
+          const ey = e.y + e.height / 2;
+          const dist = Math.hypot(ex - s.x, ey - s.y);
+          if (dist < radius && now > (e.slowedUntil || 0)) {
+            e.slowedUntil = now + smokeScreenSlowDurationMs;
+            if (!e.baseSpeed) e.baseSpeed = e.speed;
+          }
+        });
+      }
+
+      // Move missiles upward; remove if off top
+      for (let i = missiles.length - 1; i >= 0; i--) {
+        missiles[i].y -= missileSpeed;
+        if (missiles[i].y + missiles[i].height < 0) {
+          missiles.splice(i, 1);
+        }
+      }
+
+      // Move enemies (remove if off bottom); apply smoke slow; dodge weapons van
       const playerRect = { x: playerX, y: playerY, width: playerWidth, height: playerHeight };
       for (let i = enemies.length - 1; i >= 0; i--) {
-        enemies[i].y += enemies[i].speed;
+        const e = enemies[i];
+        const effectiveSpeed = (e.slowedUntil && now < e.slowedUntil) ? (e.baseSpeed || e.speed) * smokeScreenSlowFactor : e.speed;
+
+        // Check if enemy is close to weapons van and would overlap it if we moved down
+        const wouldOverlapVan = weaponsVan && (() => {
+          const eNextY = e.y + effectiveSpeed;
+          const van = weaponsVan;
+          const verticalClose = (eNextY + e.height >= van.y - enemyVanCloseMargin) && (eNextY <= van.y + van.height + enemyVanCloseMargin);
+          const horizontalOverlap = e.x < van.x + van.width && e.x + e.width > van.x;
+          return verticalClose && horizontalOverlap;
+        })();
+
+        if (wouldOverlapVan) {
+          // Dodge sideways: move away from van center, stay on road
+          const vanCenter = weaponsVan.x + weaponsVan.width / 2;
+          const enemyCenter = e.x + e.width / 2;
+          if (enemyCenter < vanCenter) {
+            e.x = Math.max(roadLeft, e.x - enemyVanDodgeSpeed);
+          } else {
+            e.x = Math.min(roadRight - e.width, e.x + enemyVanDodgeSpeed);
+          }
+        } else {
+          e.y += effectiveSpeed;
+        }
+
         if (enemies[i].y > canvas.height) {
           enemies.splice(i, 1);
           continue;
@@ -353,7 +494,7 @@
             weaponUsesLeft = 3;
             behindVanSince = 0;
             weaponsVan = null;
-            document.getElementById('weaponDisplay').textContent = 'Weapon: ' + currentWeapon + ' (3)';
+            document.getElementById('weaponDisplay').textContent = currentWeapon + ': 3';
             const popup = document.getElementById('weaponPopup');
             popup.textContent = currentWeapon + ' Acquired!';
             popup.classList.add('visible');
@@ -375,9 +516,12 @@
     function gameLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawRoad();
+      drawOilSlicks();
+      drawSmokeScreens();
       drawEnemies();
       drawWeaponsVan();
       drawBullets();
+      drawMissiles();
       drawPlayer();
       drawFlash();
       update();
@@ -400,9 +544,33 @@
       const expected = { o: WEAPONS.OIL_SLICK, s: WEAPONS.SMOKE_SCREEN, m: WEAPONS.MISSILES };
       if (currentWeapon !== expected[key]) return;
       weaponUsesLeft--;
-      document.getElementById('weaponDisplay').textContent = weaponUsesLeft > 0 ? 'Weapon: ' + currentWeapon + ' (' + weaponUsesLeft + ')' : 'Weapon: None';
-      if (weaponUsesLeft <= 0) currentWeapon = null;
-      // Actual effects (oil slick, smoke screen, missiles) will be wired in next prompt
+      const now = Date.now();
+      const hud = document.getElementById('weaponDisplay');
+      const popup = document.getElementById('weaponPopup');
+      if (weaponUsesLeft <= 0) {
+        currentWeapon = null;
+        hud.textContent = 'Weapon: None';
+      } else {
+        hud.textContent = currentWeapon + ': ' + weaponUsesLeft;
+      }
+      if (key === 'o') {
+        const x = playerX + playerWidth / 2 - oilSlickWidth / 2;
+        const y = playerY + playerHeight;
+        oilSlicks.push({ x, y, width: oilSlickWidth, height: oilSlickHeight, spawnTime: now });
+        popup.textContent = 'Oil Slick!';
+      } else if (key === 's') {
+        const x = playerX + playerWidth / 2;
+        const y = playerY + playerHeight;
+        smokeScreens.push({ x, y, spawnTime: now });
+        popup.textContent = 'Smoke Screen!';
+      } else if (key === 'm') {
+        const x = playerX + playerWidth / 2 - missileWidth / 2;
+        const y = playerY;
+        missiles.push({ x, y, width: missileWidth, height: missileHeight });
+        popup.textContent = 'Missiles!';
+      }
+      popup.classList.add('visible');
+      weaponPopupUntil = now + weaponDeployPopupDuration;
     }
 
     document.addEventListener('keydown', (e) => {
