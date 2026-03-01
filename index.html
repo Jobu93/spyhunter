@@ -36,6 +36,29 @@
       text-shadow: 0 1px 2px #000;
       z-index: 1;
     }
+    .weapon-hud {
+      position: absolute;
+      top: 36px;
+      left: 12px;
+      color: #ffeb3b;
+      font: 14px/1.2 sans-serif;
+      text-shadow: 0 1px 2px #000;
+      z-index: 1;
+    }
+    .weapon-popup {
+      position: absolute;
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ffeb3b;
+      font: bold 24px/1.2 sans-serif;
+      text-shadow: 0 2px 4px #000;
+      z-index: 3;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .weapon-popup.visible { opacity: 1; }
     .game-over {
       position: absolute;
       top: 50%;
@@ -54,6 +77,8 @@
   <div style="position: relative;">
     <span id="livesDisplay" class="lives">Lives: 3</span>
     <span id="scoreDisplay" class="score">Score: 0</span>
+    <span id="weaponDisplay" class="weapon-hud">Weapon: None</span>
+    <div id="weaponPopup" class="weapon-popup"></div>
     <div id="gameOver" class="game-over">Game Over</div>
     <canvas id="gameCanvas" width="600" height="800"></canvas>
   </div>
@@ -106,6 +131,31 @@
     let lastShotAt = 0;
     let score = 0;
 
+    // Weapons Van
+    const weaponsVanWidth = 52;
+    const weaponsVanHeight = 72;
+    const weaponsVanColor = '#2980b9';
+    const weaponsVanSpeed = 2;  // scroll slowly toward the player
+    const weaponsVanSpawnInterval = 30000;  // 30 seconds
+    const weaponsVanCloseDistance = 20;  // pause when van back is 20px above player
+    const weaponsVanPauseDurationMs = 3000;  // stop for 3 seconds so player can receive weapon
+    let weaponsVan = null;
+    let nextWeaponsVanAt = Date.now() + weaponsVanSpawnInterval;
+    let weaponsVanPausedUntil = 0;  // 0 = moving; timestamp = paused until then
+
+    // Weapon collection (player behind van for 2 seconds)
+    const behindVanDistance = 30;  // max gap between van rear and player front
+    const behindVanHorizontalTolerance = 20;
+    let behindVanSince = 0;  // timestamp when player first got behind
+    const timeToCollectMs = 2000;
+
+    // Special weapons
+    const WEAPONS = { NONE: null, OIL_SLICK: 'Oil Slick', SMOKE_SCREEN: 'Smoke Screen', MISSILES: 'Missiles' };
+    let currentWeapon = null;
+    let weaponUsesLeft = 0;
+    const weaponPopupDuration = 1500;
+    let weaponPopupUntil = 0;
+
     function drawRoad() {
       // Green roadside – left
       ctx.fillStyle = '#2d5a27';
@@ -155,6 +205,19 @@
       });
     }
 
+    function spawnWeaponsVan() {
+      const centerLane = 1;  // middle lane
+      const laneCenterX = roadLeft + centerLane * laneWidth + laneWidth / 2;
+      const x = Math.max(roadLeft, Math.min(roadRight - weaponsVanWidth, laneCenterX - weaponsVanWidth / 2));
+      weaponsVan = { x, y: -weaponsVanHeight, width: weaponsVanWidth, height: weaponsVanHeight, speed: weaponsVanSpeed };
+    }
+
+    function drawWeaponsVan() {
+      if (!weaponsVan) return;
+      ctx.fillStyle = weaponsVanColor;
+      ctx.fillRect(weaponsVan.x, weaponsVan.y, weaponsVan.width, weaponsVan.height);
+    }
+
     function drawBullets() {
       ctx.fillStyle = '#ffeb3b';
       bullets.forEach(b => {
@@ -182,8 +245,38 @@
       if (keys.right) playerX += playerSpeed;
       playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
 
-      // Spawn enemies at random 1–2s intervals
+      // Spawn weapons van every 30 seconds
       const now = Date.now();
+      if (!weaponsVan && now >= nextWeaponsVanAt) {
+        spawnWeaponsVan();
+        nextWeaponsVanAt = now + weaponsVanSpawnInterval;
+      }
+
+      // Move weapons van: scroll slowly; when very close to player, pause 3s then resume
+      if (weaponsVan) {
+        const vanBack = weaponsVan.y + weaponsVan.height;
+        const playerFront = playerY;
+        const gapAbovePlayer = playerFront - vanBack;
+        const isVeryClose = gapAbovePlayer >= -20 && gapAbovePlayer <= weaponsVanCloseDistance;
+
+        if (isVeryClose && weaponsVanPausedUntil === 0) {
+          weaponsVanPausedUntil = now + weaponsVanPauseDurationMs;
+        }
+        if (now < weaponsVanPausedUntil) {
+          // paused: don't move
+        } else {
+          weaponsVan.y += weaponsVan.speed;
+        }
+        if (weaponsVan.y > canvas.height) {
+          weaponsVan = null;
+          behindVanSince = 0;
+          weaponsVanPausedUntil = 0;
+        }
+      } else {
+        weaponsVanPausedUntil = 0;
+      }
+
+      // Spawn enemies at random 1–2s intervals
       if (now >= nextSpawnAt) {
         spawnEnemy();
         nextSpawnAt = now + 1000 + Math.random() * 1000;
@@ -231,12 +324,59 @@
           }
         }
       }
+
+      // Weapons van collision: block movement like a wall, no damage
+      if (weaponsVan && collides(playerRect, weaponsVan)) {
+        const playerCenter = playerX + playerWidth / 2;
+        const vanCenter = weaponsVan.x + weaponsVan.width / 2;
+        if (playerCenter < vanCenter) {
+          playerX = weaponsVan.x - playerWidth - 1;
+        } else {
+          playerX = weaponsVan.x + weaponsVan.width + 1;
+        }
+        playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+      }
+
+      // Weapon collection: player behind van for 2 seconds
+      if (weaponsVan) {
+        const vanBack = weaponsVan.y + weaponsVan.height;
+        const playerFront = playerY;
+        const verticalGap = playerFront - vanBack;
+        const horizontalOverlap = Math.abs((playerX + playerWidth / 2) - (weaponsVan.x + weaponsVan.width / 2)) < weaponsVan.width / 2 + behindVanHorizontalTolerance;
+        const isBehind = verticalGap >= 0 && verticalGap <= behindVanDistance && horizontalOverlap;
+
+        if (isBehind) {
+          if (behindVanSince === 0) behindVanSince = now;
+          if (now - behindVanSince >= timeToCollectMs) {
+            const choices = [WEAPONS.OIL_SLICK, WEAPONS.SMOKE_SCREEN, WEAPONS.MISSILES];
+            currentWeapon = choices[Math.floor(Math.random() * choices.length)];
+            weaponUsesLeft = 3;
+            behindVanSince = 0;
+            weaponsVan = null;
+            document.getElementById('weaponDisplay').textContent = 'Weapon: ' + currentWeapon + ' (3)';
+            const popup = document.getElementById('weaponPopup');
+            popup.textContent = currentWeapon + ' Acquired!';
+            popup.classList.add('visible');
+            weaponPopupUntil = now + weaponPopupDuration;
+          }
+        } else {
+          behindVanSince = 0;
+        }
+      } else {
+        behindVanSince = 0;
+      }
+
+      // Hide weapon popup after duration
+      if (now >= weaponPopupUntil) {
+        document.getElementById('weaponPopup').classList.remove('visible');
+      }
     }
 
     function gameLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawRoad();
       drawEnemies();
+      drawWeaponsVan();
       drawBullets();
       drawPlayer();
       drawFlash();
@@ -254,10 +394,24 @@
       bullets.push({ x, y, width: bulletWidth, height: bulletHeight });
     }
 
+    function useWeapon(key) {
+      if (gameOver) return;
+      if (!currentWeapon || weaponUsesLeft <= 0) return;
+      const expected = { o: WEAPONS.OIL_SLICK, s: WEAPONS.SMOKE_SCREEN, m: WEAPONS.MISSILES };
+      if (currentWeapon !== expected[key]) return;
+      weaponUsesLeft--;
+      document.getElementById('weaponDisplay').textContent = weaponUsesLeft > 0 ? 'Weapon: ' + currentWeapon + ' (' + weaponUsesLeft + ')' : 'Weapon: None';
+      if (weaponUsesLeft <= 0) currentWeapon = null;
+      // Actual effects (oil slick, smoke screen, missiles) will be wired in next prompt
+    }
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
       if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
       if (e.key === ' ') { fireBullet(); e.preventDefault(); }
+      if (e.key === 'o' || e.key === 'O') { useWeapon('o'); e.preventDefault(); }
+      if (e.key === 's' || e.key === 'S') { useWeapon('s'); e.preventDefault(); }
+      if (e.key === 'm' || e.key === 'M') { useWeapon('m'); e.preventDefault(); }
     });
     document.addEventListener('keyup', (e) => {
       if (e.key === 'ArrowLeft') keys.left = false;
