@@ -79,8 +79,24 @@
       text-shadow: 0 2px 4px #000;
       z-index: 2;
       display: none;
+      text-align: center;
     }
     .game-over.visible { display: block; }
+    .game-over .final-score { font-size: 24px; margin-top: 12px; color: #fff; }
+    .game-over .restart-hint { font-size: 18px; margin-top: 8px; color: #aaa; }
+    .get-ready {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ffeb3b;
+      font: bold 36px/1.2 sans-serif;
+      text-shadow: 0 2px 4px #000;
+      z-index: 2;
+      pointer-events: none;
+      display: none;
+    }
+    .get-ready.visible { display: block; }
   </style>
 </head>
 <body>
@@ -90,7 +106,12 @@
     <span id="scoreDisplay" class="score">Score: 0</span>
     <span id="weaponDisplay" class="weapon-hud">Weapon: None</span>
     <div id="weaponPopup" class="weapon-popup"></div>
-    <div id="gameOver" class="game-over">Game Over</div>
+    <div id="getReady" class="get-ready">Get Ready</div>
+    <div id="gameOver" class="game-over">
+      Game Over<br>
+      <span class="final-score" id="finalScore">Score: 0</span><br>
+      <span class="restart-hint">Press Enter to Restart</span>
+    </div>
     <canvas id="gameCanvas" width="600" height="800"></canvas>
   </div>
   <script>
@@ -128,6 +149,10 @@
     let animationId = null;
     let flashUntil = 0;
     const flashDuration = 250;
+    let invincibleUntil = 0;  // 2s invincibility after respawn
+    const invincibilityDurationMs = 2000;
+    let getReadyUntil = 0;  // "Get Ready" shown for 2s before game starts
+    const getReadyDurationMs = 2000;
 
     // Enemies: types = standard, aggressive, speed
     const ENEMY_TYPES = { STANDARD: 'standard', AGGRESSIVE: 'aggressive', SPEED: 'speed' };
@@ -199,17 +224,87 @@
     const missilePoints = 200;
     let missiles = [];
 
+    // Explosions (when enemies destroyed)
+    const explosionDurationMs = 400;
+    let explosions = [];
+
+    // Trees (roadside scenery)
+    const treeWidth = 24;
+    const treeHeight = 50;
+    const treeSpawnInterval = 120;  // spawn every N px of scroll
+    let trees = [];
+    let scrollAccumulator = 0;
+
+    // Draw a car-shaped vehicle (pointed front, wheel wells, tapered body)
+    function drawCarShape(x, y, w, h, color, isPlayer, isVan) {
+      ctx.save();
+      const taper = isPlayer ? 0.35 : (isVan ? 0.15 : 0.25);  // pointed front
+      const wheelWellH = Math.floor(h * 0.22);
+      const wheelWellW = Math.floor(w * 0.35);
+      const cabinTop = isVan ? h * 0.35 : h * 0.4;
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      // Front (pointed) – top center
+      ctx.moveTo(x + w / 2, y);
+      // Right front taper
+      ctx.lineTo(x + w - w * taper * 0.5, y + h * 0.15);
+      // Right side
+      ctx.lineTo(x + w - 4, y + h - wheelWellH);
+      // Right wheel well
+      ctx.lineTo(x + w - wheelWellW, y + h - wheelWellH);
+      ctx.lineTo(x + w - wheelWellW, y + h);
+      ctx.lineTo(x + wheelWellW, y + h);
+      ctx.lineTo(x + wheelWellW, y + h - wheelWellH);
+      // Left side
+      ctx.lineTo(x + 4, y + h - wheelWellH);
+      ctx.lineTo(x + w * taper * 0.5, y + h * 0.15);
+      ctx.closePath();
+      ctx.fill();
+
+      // Wheel wells (darker)
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(x + 3, y + h - wheelWellH, wheelWellW - 3, wheelWellH + 2);
+      ctx.fillRect(x + w - wheelWellW, y + h - wheelWellH, wheelWellW - 3, wheelWellH + 2);
+
+      // Cabin/windshield (lighter tint)
+      ctx.fillStyle = isVan ? 'rgba(200,220,255,0.4)' : 'rgba(255,255,255,0.25)';
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.3, y + cabinTop);
+      ctx.lineTo(x + w * 0.7, y + cabinTop);
+      ctx.lineTo(x + w * 0.65, y + h * 0.55);
+      ctx.lineTo(x + w * 0.35, y + h * 0.55);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
     function drawRoad() {
-      // Green roadside – left
+      const rumbleWidth = 14;
+      // Green roadside – left (before rumble)
       ctx.fillStyle = '#2d5a27';
-      ctx.fillRect(0, 0, roadLeft, canvas.height);
-      // Green roadside – right
+      ctx.fillRect(0, 0, roadLeft - rumbleWidth, canvas.height);
+      // Green roadside – right (after rumble)
       ctx.fillStyle = '#2d5a27';
-      ctx.fillRect(roadRight, 0, canvas.width - roadRight, canvas.height);
+      ctx.fillRect(roadRight + rumbleWidth, 0, canvas.width - roadRight - rumbleWidth, canvas.height);
+
+      // Dark gray rumble strips (between road edge and green)
+      ctx.fillStyle = '#3a3a3a';
+      ctx.fillRect(roadLeft - rumbleWidth, 0, rumbleWidth, canvas.height);
+      ctx.fillRect(roadRight, 0, rumbleWidth, canvas.height);
 
       // Gray road
       ctx.fillStyle = '#4a4a4a';
       ctx.fillRect(roadLeft, 0, roadWidth, canvas.height);
+
+      // Subtle darker center line (solid)
+      ctx.strokeStyle = '#353535';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.stroke();
 
       // White dashed lane lines (vertical, scrolling)
       ctx.strokeStyle = '#ffffff';
@@ -228,8 +323,11 @@
     }
 
     function drawPlayer() {
-      ctx.fillStyle = '#e74c3c';
-      ctx.fillRect(playerX, playerY, playerWidth, playerHeight);
+      const now = Date.now();
+      const isInvincible = now < invincibleUntil;
+      const blink = isInvincible && Math.floor(now / 100) % 2 === 0;
+      if (blink) return;  // blink = don't draw (flash effect)
+      drawCarShape(playerX, playerY, playerWidth, playerHeight, '#ffffff', true, false);
     }
 
     // Difficulty helpers: elapsed in seconds
@@ -278,8 +376,7 @@
 
     function drawEnemies() {
       enemies.forEach(e => {
-        ctx.fillStyle = e.color;
-        ctx.fillRect(e.x, e.y, e.width, e.height);
+        drawCarShape(e.x, e.y, e.width, e.height, e.color, false, false);
       });
     }
 
@@ -292,8 +389,7 @@
 
     function drawWeaponsVan() {
       if (!weaponsVan) return;
-      ctx.fillStyle = weaponsVanColor;
-      ctx.fillRect(weaponsVan.x, weaponsVan.y, weaponsVan.width, weaponsVan.height);
+      drawCarShape(weaponsVan.x, weaponsVan.y, weaponsVan.width, weaponsVan.height, weaponsVanColor, false, true);
     }
 
     function drawBullets() {
@@ -341,20 +437,86 @@
       }
     }
 
+    function spawnExplosion(x, y) {
+      explosions.push({ x, y, spawnTime: Date.now() });
+    }
+
+    function drawExplosions() {
+      const now = Date.now();
+      explosions.forEach(ex => {
+        const elapsed = (now - ex.spawnTime) / explosionDurationMs;
+        if (elapsed >= 1) return;
+        const radius = 20 + elapsed * 35;
+        const alpha = 1 - elapsed;
+        ctx.fillStyle = `rgba(255, ${Math.floor(100 + 55 * (1 - elapsed))}, 0, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(ex.x, ex.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawTrees() {
+      trees.forEach(t => {
+        const trunkH = treeHeight * 0.5;
+        ctx.fillStyle = '#5d4037';
+        ctx.fillRect(t.x, t.y + treeHeight - trunkH, treeWidth * 0.5, trunkH);
+        ctx.fillStyle = '#2d5a27';
+        ctx.beginPath();
+        ctx.arc(t.x + treeWidth * 0.25, t.y + treeHeight * 0.4, treeWidth * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
     function collides(a, b) {
       return a.x < b.x + b.width && a.x + a.width > b.x &&
              a.y < b.y + b.height && a.y + a.height > b.y;
     }
 
     function update() {
-      if (gameOver) return;
       const now = Date.now();
-      if (gameStartTime === 0) gameStartTime = now;
+      if (gameOver) {
+        return;
+      }
+      if (gameStartTime === 0) {
+        gameStartTime = now;
+        getReadyUntil = now + getReadyDurationMs;
+      }
       const elapsedMs = now - gameStartTime;
       const elapsedSec = elapsedMs / 1000;
+      const inGetReady = now < getReadyUntil;
+      document.getElementById('getReady').classList.toggle('visible', inGetReady);
+      if (inGetReady) {
+        if (keys.left) playerX -= playerSpeed;
+        if (keys.right) playerX += playerSpeed;
+        playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+        return;
+      }
       const currentScrollSpeed = getCurrentScrollSpeed(elapsedSec);
       dashOffset = (dashOffset + currentScrollSpeed) % (dashLength + dashGap);
       document.getElementById('timerDisplay').textContent = Math.floor(elapsedSec / 60) + ':' + String(Math.floor(elapsedSec % 60)).padStart(2, '0');
+
+      // Update explosions: scroll with road, remove when expired
+      for (let i = explosions.length - 1; i >= 0; i--) {
+        explosions[i].y += currentScrollSpeed;
+        if (now - explosions[i].spawnTime >= explosionDurationMs || explosions[i].y > canvas.height) {
+          explosions.splice(i, 1);
+        }
+      }
+
+      // Spawn and scroll trees
+      scrollAccumulator += currentScrollSpeed;
+      const rumbleWidth = 14;
+      while (scrollAccumulator >= treeSpawnInterval) {
+        scrollAccumulator -= treeSpawnInterval;
+        const leftX = 15 + Math.random() * (roadLeft - rumbleWidth - treeWidth - 30);
+        const rightX = roadRight + rumbleWidth + 15 + Math.random() * (canvas.width - roadRight - rumbleWidth - treeWidth - 30);
+        trees.push({ x: leftX, y: -treeHeight, width: treeWidth, height: treeHeight });
+        trees.push({ x: rightX, y: -treeHeight, width: treeWidth, height: treeHeight });
+      }
+      for (let i = trees.length - 1; i >= 0; i--) {
+        trees[i].y += currentScrollSpeed;
+        if (trees[i].y > canvas.height) trees.splice(i, 1);
+      }
 
       if (keys.left) playerX -= playerSpeed;
       if (keys.right) playerX += playerSpeed;
@@ -409,6 +571,7 @@
       for (let b = bullets.length - 1; b >= 0; b--) {
         for (let e = enemies.length - 1; e >= 0; e--) {
           if (collides(bullets[b], enemies[e])) {
+            spawnExplosion(enemies[e].x + enemies[e].width / 2, enemies[e].y + enemies[e].height / 2);
             score += 100;
             document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
             enemies.splice(e, 1);
@@ -422,6 +585,7 @@
       for (let m = missiles.length - 1; m >= 0; m--) {
         for (let e = enemies.length - 1; e >= 0; e--) {
           if (collides(missiles[m], enemies[e])) {
+            spawnExplosion(enemies[e].x + enemies[e].width / 2, enemies[e].y + enemies[e].height / 2);
             score += missilePoints;
             document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
             enemies.splice(e, 1);
@@ -440,6 +604,7 @@
         }
         for (let e = enemies.length - 1; e >= 0; e--) {
           if (collides(oilSlicks[i], enemies[e])) {
+            spawnExplosion(enemies[e].x + enemies[e].width / 2, enemies[e].y + enemies[e].height / 2);
             score += oilSlickPoints;
             document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
             enemies.splice(e, 1);
@@ -521,14 +686,16 @@
           enemies.splice(i, 1);
           continue;
         }
-        if (collides(playerRect, enemies[i])) {
+        if (!(now < invincibleUntil) && collides(playerRect, enemies[i])) {
           flashUntil = Date.now() + flashDuration;
+          invincibleUntil = Date.now() + invincibilityDurationMs;
           playerX = canvas.width / 2 - playerWidth / 2;
           lives--;
           document.getElementById('livesDisplay').textContent = 'Lives: ' + lives;
           enemies.splice(i, 1);
           if (lives <= 0) {
             gameOver = true;
+            document.getElementById('finalScore').textContent = 'Score: ' + score;
             document.getElementById('gameOver').classList.add('visible');
             return;
           }
@@ -585,6 +752,7 @@
     function gameLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawRoad();
+      drawTrees();
       drawOilSlicks();
       drawSmokeScreens();
       drawEnemies();
@@ -592,14 +760,52 @@
       drawBullets();
       drawMissiles();
       drawPlayer();
+      drawExplosions();
       drawFlash();
       update();
       if (!gameOver) animationId = requestAnimationFrame(gameLoop);
     }
 
+    function resetGame() {
+      lives = 3;
+      gameOver = false;
+      gameStartTime = 0;
+      getReadyUntil = 0;
+      invincibleUntil = 0;
+      dashOffset = 0;
+      scrollAccumulator = 0;
+      playerX = canvas.width / 2 - playerWidth / 2;
+      enemies = [];
+      bullets = [];
+      missiles = [];
+      oilSlicks = [];
+      smokeScreens = [];
+      explosions = [];
+      trees = [];
+      weaponsVan = null;
+      behindVanSince = 0;
+      weaponsVanPausedUntil = 0;
+      currentWeapon = null;
+      weaponUsesLeft = 0;
+      weaponPopupUntil = 0;
+      score = 0;
+      nextSpawnAt = Date.now() + 1000 + Math.random() * 1000;
+      nextWeaponsVanAt = Date.now() + weaponsVanSpawnInterval;
+      document.getElementById('livesDisplay').textContent = 'Lives: ' + lives;
+      document.getElementById('timerDisplay').textContent = '0:00';
+      document.getElementById('scoreDisplay').textContent = 'Score: ' + score;
+      document.getElementById('weaponDisplay').textContent = 'Weapon: None';
+      document.getElementById('weaponPopup').classList.remove('visible');
+      document.getElementById('getReady').classList.remove('visible');
+      document.getElementById('gameOver').classList.remove('visible');
+      if (animationId) cancelAnimationFrame(animationId);
+      animationId = requestAnimationFrame(gameLoop);
+    }
+
     function fireBullet() {
       if (gameOver) return;
       const now = Date.now();
+      if (gameStartTime > 0 && now < getReadyUntil) return;
       if (now - lastShotAt < fireCooldownMs) return;
       lastShotAt = now;
       const x = playerX + playerWidth / 2 - bulletWidth / 2;
@@ -609,11 +815,12 @@
 
     function useWeapon(key) {
       if (gameOver) return;
+      const now = Date.now();
+      if (gameStartTime > 0 && now < getReadyUntil) return;
       if (!currentWeapon || weaponUsesLeft <= 0) return;
       const expected = { o: WEAPONS.OIL_SLICK, s: WEAPONS.SMOKE_SCREEN, m: WEAPONS.MISSILES };
       if (currentWeapon !== expected[key]) return;
       weaponUsesLeft--;
-      const now = Date.now();
       const hud = document.getElementById('weaponDisplay');
       const popup = document.getElementById('weaponPopup');
       if (weaponUsesLeft <= 0) {
@@ -643,6 +850,7 @@
     }
 
     document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && gameOver) { resetGame(); e.preventDefault(); return; }
       if (e.key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
       if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
       if (e.key === ' ') { fireBullet(); e.preventDefault(); }
