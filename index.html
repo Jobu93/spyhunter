@@ -17,6 +17,10 @@
       display: block;
       background: #2d2d2d;
       border: 2px solid #444;
+      max-width: 95vw;
+      max-height: 92vh;
+      width: 960px;
+      height: 800px;
     }
     .lives {
       position: absolute;
@@ -112,14 +116,16 @@
       <span class="final-score" id="finalScore">Score: 0</span><br>
       <span class="restart-hint">Press Enter to Restart</span>
     </div>
-    <canvas id="gameCanvas" width="600" height="800"></canvas>
+    <canvas id="gameCanvas" width="960" height="800"></canvas>
   </div>
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
     // Road
-    const roadWidth = canvas.width * 0.5;
+    // Make the overall gameplay view wider and leave generous shoulders
+    // for future road winding/forks/splits.
+    const roadWidth = canvas.width * 0.38;
     const roadLeft = (canvas.width - roadWidth) / 2;
     const roadRight = roadLeft + roadWidth;
 
@@ -137,10 +143,26 @@
     // Player car
     const playerWidth = 40;
     const playerHeight = 60;
-    const playerY = canvas.height * (2 / 3);
+    const playerBaseY = canvas.height * (2 / 3);
+    const playerVerticalRange = canvas.height * 0.25; // ~quarter of game area vertically
+    const playerMinY = Math.max(0, playerBaseY - playerVerticalRange / 2);
+    const playerMaxY = Math.min(canvas.height - playerHeight, playerBaseY + playerVerticalRange / 2);
+    let playerY = playerBaseY;
     let playerX = canvas.width / 2 - playerWidth / 2;
-    const playerSpeed = 8;
-    const keys = { left: false, right: false };
+    // Smooth, accurate movement (time-based, independent of frame rate)
+    const playerMaxSpeed = 260;    // px/s
+    const playerAccel = 2400;      // px/s^2 when key held
+    const playerDecel = 3200;      // px/s^2 when no key held
+    let playerVelX = 0;
+    let playerVelY = 0;
+    let lastUpdateAt = 0;
+    const keys = { left: false, right: false, up: false, down: false };
+
+    function approach(current, target, maxDelta) {
+      if (current < target) return Math.min(target, current + maxDelta);
+      if (current > target) return Math.max(target, current - maxDelta);
+      return target;
+    }
 
     // Game state
     let lives = 3;
@@ -477,6 +499,13 @@
       if (gameOver) {
         return;
       }
+
+      // Frame delta for smooth player motion (clamped to avoid huge jumps after tab switches)
+      let dtMs = lastUpdateAt ? (now - lastUpdateAt) : (1000 / 60);
+      dtMs = Math.max(0, Math.min(50, dtMs));
+      const dtSec = dtMs / 1000;
+      lastUpdateAt = now;
+
       if (gameStartTime === 0) {
         gameStartTime = now;
         getReadyUntil = now + getReadyDurationMs;
@@ -486,9 +515,27 @@
       const inGetReady = now < getReadyUntil;
       document.getElementById('getReady').classList.toggle('visible', inGetReady);
       if (inGetReady) {
-        if (keys.left) playerX -= playerSpeed;
-        if (keys.right) playerX += playerSpeed;
-        playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+        // Allow positioning during "Get Ready" using the same smooth controls
+        const leftPressed = keys.left && !keys.right;
+        const rightPressed = keys.right && !keys.left;
+        const upPressed = keys.up && !keys.down;
+        const downPressed = keys.down && !keys.up;
+
+        const targetVelX = leftPressed ? -playerMaxSpeed : rightPressed ? playerMaxSpeed : 0;
+        const targetVelY = upPressed ? -playerMaxSpeed : downPressed ? playerMaxSpeed : 0;
+        playerVelX = approach(playerVelX, targetVelX, (targetVelX === 0 ? playerDecel : playerAccel) * dtSec);
+        playerVelY = approach(playerVelY, targetVelY, (targetVelY === 0 ? playerDecel : playerAccel) * dtSec);
+
+        playerX += playerVelX * dtSec;
+        playerY += playerVelY * dtSec;
+
+        const clampedX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+        if (clampedX !== playerX) playerVelX = 0;
+        playerX = clampedX;
+
+        const clampedY = Math.max(playerMinY, Math.min(playerMaxY, playerY));
+        if (clampedY !== playerY) playerVelY = 0;
+        playerY = clampedY;
         return;
       }
       const currentScrollSpeed = getCurrentScrollSpeed(elapsedSec);
@@ -518,9 +565,27 @@
         if (trees[i].y > canvas.height) trees.splice(i, 1);
       }
 
-      if (keys.left) playerX -= playerSpeed;
-      if (keys.right) playerX += playerSpeed;
-      playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+      // Player movement (smooth + accurate)
+      const leftPressed = keys.left && !keys.right;
+      const rightPressed = keys.right && !keys.left;
+      const upPressed = keys.up && !keys.down;
+      const downPressed = keys.down && !keys.up;
+
+      const targetVelX = leftPressed ? -playerMaxSpeed : rightPressed ? playerMaxSpeed : 0;
+      const targetVelY = upPressed ? -playerMaxSpeed : downPressed ? playerMaxSpeed : 0;
+      playerVelX = approach(playerVelX, targetVelX, (targetVelX === 0 ? playerDecel : playerAccel) * dtSec);
+      playerVelY = approach(playerVelY, targetVelY, (targetVelY === 0 ? playerDecel : playerAccel) * dtSec);
+
+      playerX += playerVelX * dtSec;
+      playerY += playerVelY * dtSec;
+
+      const clampedX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+      if (clampedX !== playerX) playerVelX = 0;
+      playerX = clampedX;
+
+      const clampedY = Math.max(playerMinY, Math.min(playerMaxY, playerY));
+      if (clampedY !== playerY) playerVelY = 0;
+      playerY = clampedY;
 
       // Spawn weapons van every 30 seconds
       if (!weaponsVan && now >= nextWeaponsVanAt) {
@@ -690,6 +755,9 @@
           flashUntil = Date.now() + flashDuration;
           invincibleUntil = Date.now() + invincibilityDurationMs;
           playerX = canvas.width / 2 - playerWidth / 2;
+          playerY = playerBaseY;
+          playerVelX = 0;
+          playerVelY = 0;
           lives--;
           document.getElementById('livesDisplay').textContent = 'Lives: ' + lives;
           enemies.splice(i, 1);
@@ -712,6 +780,16 @@
           playerX = weaponsVan.x + weaponsVan.width + 1;
         }
         playerX = Math.max(roadLeft, Math.min(roadRight - playerWidth, playerX));
+
+        // If the player tries to drive into the van vertically, prevent overlap
+        if (playerY < weaponsVan.y + weaponsVan.height && playerY + playerHeight > weaponsVan.y) {
+          if (playerY >= weaponsVan.y) {
+            playerY = Math.min(playerMaxY, weaponsVan.y + weaponsVan.height + 1);
+          } else {
+            playerY = Math.max(playerMinY, weaponsVan.y - playerHeight - 1);
+          }
+          playerVelY = 0;
+        }
       }
 
       // Weapon collection: player behind van for 2 seconds
@@ -775,6 +853,10 @@
       dashOffset = 0;
       scrollAccumulator = 0;
       playerX = canvas.width / 2 - playerWidth / 2;
+      playerY = playerBaseY;
+      playerVelX = 0;
+      playerVelY = 0;
+      lastUpdateAt = 0;
       enemies = [];
       bullets = [];
       missiles = [];
@@ -853,6 +935,8 @@
       if (e.key === 'Enter' && gameOver) { resetGame(); e.preventDefault(); return; }
       if (e.key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
       if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
+      if (e.key === 'ArrowUp') { keys.up = true; e.preventDefault(); }
+      if (e.key === 'ArrowDown') { keys.down = true; e.preventDefault(); }
       if (e.key === ' ') { fireBullet(); e.preventDefault(); }
       if (e.key === 'o' || e.key === 'O') { useWeapon('o'); e.preventDefault(); }
       if (e.key === 's' || e.key === 'S') { useWeapon('s'); e.preventDefault(); }
@@ -861,6 +945,8 @@
     document.addEventListener('keyup', (e) => {
       if (e.key === 'ArrowLeft') keys.left = false;
       if (e.key === 'ArrowRight') keys.right = false;
+      if (e.key === 'ArrowUp') keys.up = false;
+      if (e.key === 'ArrowDown') keys.down = false;
     });
 
     gameLoop();
