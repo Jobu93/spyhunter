@@ -156,7 +156,7 @@
     let playerVelX = 0;
     let playerVelY = 0;
     let lastUpdateAt = 0;
-    const keys = { left: false, right: false, up: false, down: false };
+    const keys = { left: false, right: false, up: false, down: false, space: false };
 
     function approach(current, target, maxDelta) {
       if (current < target) return Math.min(target, current + maxDelta);
@@ -193,7 +193,7 @@
     const bulletWidth = 6;
     const bulletHeight = 16;
     const bulletSpeed = 22;  // upward, faster than scroll
-    const fireCooldownMs = 340;  // ~3 bullets per second
+    const fireCooldownMs = 100;  // ~10 bullets per second (machine gun)
     let bullets = [];
     let lastShotAt = 0;
     let score = 0;
@@ -587,6 +587,11 @@
       if (clampedY !== playerY) playerVelY = 0;
       playerY = clampedY;
 
+      // Continuous firing while space is held down
+      if (keys.space) {
+        fireBullet();
+      }
+
       // Spawn weapons van every 30 seconds
       if (!weaponsVan && now >= nextWeaponsVanAt) {
         spawnWeaponsVan();
@@ -857,6 +862,8 @@
       playerVelX = 0;
       playerVelY = 0;
       lastUpdateAt = 0;
+      keys.space = false;
+      lastShotAt = 0;
       enemies = [];
       bullets = [];
       missiles = [];
@@ -890,9 +897,13 @@
       if (gameStartTime > 0 && now < getReadyUntil) return;
       if (now - lastShotAt < fireCooldownMs) return;
       lastShotAt = now;
-      const x = playerX + playerWidth / 2 - bulletWidth / 2;
+      const centerX = playerX + playerWidth / 2;
       const y = playerY;
-      bullets.push({ x, y, width: bulletWidth, height: bulletHeight });
+      const offsetFromCenter = playerWidth * 0.25; // halfway from center to edge
+      const leftX = centerX - offsetFromCenter - bulletWidth / 2;
+      const rightX = centerX + offsetFromCenter - bulletWidth / 2;
+      bullets.push({ x: leftX, y, width: bulletWidth, height: bulletHeight });
+      bullets.push({ x: rightX, y, width: bulletWidth, height: bulletHeight });
     }
 
     function useWeapon(key) {
@@ -937,7 +948,7 @@
       if (e.key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
       if (e.key === 'ArrowUp') { keys.up = true; e.preventDefault(); }
       if (e.key === 'ArrowDown') { keys.down = true; e.preventDefault(); }
-      if (e.key === ' ') { fireBullet(); e.preventDefault(); }
+      if (e.key === ' ') { keys.space = true; e.preventDefault(); }
       if (e.key === 'o' || e.key === 'O') { useWeapon('o'); e.preventDefault(); }
       if (e.key === 's' || e.key === 'S') { useWeapon('s'); e.preventDefault(); }
       if (e.key === 'm' || e.key === 'M') { useWeapon('m'); e.preventDefault(); }
@@ -947,6 +958,7 @@
       if (e.key === 'ArrowRight') keys.right = false;
       if (e.key === 'ArrowUp') keys.up = false;
       if (e.key === 'ArrowDown') keys.down = false;
+      if (e.key === ' ') keys.space = false;
     });
 
     gameLoop();
